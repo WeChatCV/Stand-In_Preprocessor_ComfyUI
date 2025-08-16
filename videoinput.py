@@ -106,17 +106,17 @@ class VideoInputPreprocessor:
             target_frame_pil = tensor_to_pil(frame_tensor).copy()
 
             # Find the bounding box of the largest contour in the mask
-            contours, _ = cv2.findContours(full_mask_np, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            
-            if contours:
-                largest_contour = max(contours, key=cv2.contourArea)
-                x, y, w_box, h_box = cv2.boundingRect(largest_contour)
-
-                # Resize the face to paste to the size of the bounding box
-                face_to_paste_resized = face_to_paste_pil.resize((w_box, h_box), Image.Resampling.LANCZOS)
+            if confident_boxes.shape[0] > 0 and 'face_crop_bgr' in locals() and face_crop_bgr.size > 0:
                 
-                # Paste the resized face onto the target frame using its own alpha channel as the mask
-                target_frame_pil.paste(face_to_paste_resized, (x, y), face_to_paste_resized)
+                x = crop_x1
+                y = crop_y1
+                box_w = crop_x2 - crop_x1
+                box_h = crop_y2 - crop_y1
+
+                if box_w > 0 and box_h > 0:
+                    face_to_paste_resized = face_to_paste_pil.resize((box_w, box_h), Image.Resampling.LANCZOS)
+                    
+                    target_frame_pil.paste(face_to_paste_resized, (x, y), face_to_paste_resized)
 
             processed_np = np.array(target_frame_pil.convert("RGB")).astype(np.float32) / 255.0
             processed_tensor = torch.from_numpy(processed_np)
