@@ -11,10 +11,10 @@ from torchvision.transforms.functional import normalize
 from typing import Union, Optional
 import folder_paths
 
-
-
+# --- GLOBALS ---
 LOADED_PROCESSORS = {}
 
+# --- DIRECTORY SETUP ---
 def set_extra_config_model_path(extra_config_models_dir_key, models_dir_name: str):
     """Helper function to set up model directories within ComfyUI."""
     models_dir_default = os.path.join(folder_paths.models_dir, models_dir_name)
@@ -29,10 +29,11 @@ def set_extra_config_model_path(extra_config_models_dir_key, models_dir_name: st
     else:
         folder_paths.add_model_folder_path(extra_config_models_dir_key, models_dir_default, is_default=True)
 
+# Set up paths for YOLO and face parsing models
 set_extra_config_model_path("yolo", "yolo")
 set_extra_config_model_path("face_parsing", "face_parsing")
 
-
+# --- MODEL DOWNLOADING ---
 def download_yolo_model(model_name="model.pt"):
     """
     Checks if a YOLO model exists and downloads it from a public source if not.
@@ -70,7 +71,7 @@ def download_yolo_model(model_name="model.pt"):
             raise e
     return model_path
 
-
+# --- IMAGE UTILS ---
 def _img2tensor(img: np.ndarray, bgr2rgb: bool = True) -> torch.Tensor:
     if bgr2rgb:
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
@@ -91,17 +92,19 @@ def _pad_to_square(img: np.ndarray, pad_color: int = 255) -> np.ndarray:
     return padded_img
 
 def tensor_to_cv2_img(tensor: torch.Tensor) -> np.ndarray:
+    """Converts a ComfyUI IMAGE tensor (B, H, W, C) to an OpenCV BGR image (H, W, C)."""
     img_np = tensor.squeeze(0).cpu().numpy()
     img_np = (img_np * 255).astype(np.uint8)
     img_bgr = cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR)
     return img_bgr
 
 def cv2_img_to_tensor(img: np.ndarray) -> torch.Tensor:
+    """Converts an OpenCV BGR image (H, W, C) to a ComfyUI IMAGE tensor (1, H, W, C)."""
     img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
     img_tensor = torch.from_numpy(img_rgb.astype(np.float32) / 255.0).unsqueeze(0)
     return img_tensor
 
-
+# --- NODES ---
 class FaceProcessorLoader:
     @classmethod
     def INPUT_TYPES(s):
@@ -163,12 +166,12 @@ class ApplyFaceProcessor:
                 "border_thresh": ("INT", {"default": 10, "min": 0, "max": 100, "step": 1}),
                 "face_crop_scale": ("FLOAT", {"default": 1.5, "min": 1.0, "max": 3.0, "step": 0.1}),
                 "confidence_threshold": ("FLOAT", {"default": 0.5, "min": 0.1, "max": 1.0, "step": 0.05}),
-                # --- NEW INPUT ---
                 "with_neck": ("BOOLEAN", {"default": False, "label_on": "enabled", "label_off": "disabled"}),
             }
         }
 
-    RETURN_TYPES = ("IMAGE",)
+    RETURN_TYPES = ("IMAGE", "IMAGE")
+    RETURN_NAMES = ("processed_image", "face_rgba")
     FUNCTION = "apply_processing"
     CATEGORY = "Stand-In"
 
@@ -224,19 +227,29 @@ class ApplyFaceProcessor:
         if with_neck:
             final_mask_np = (parsing_map_np != 0).astype(np.uint8)
         else:
-            parts_to_remove = [0, 14, 16]
+            parts_to_remove = [0, 14, 16] # Typically background, neck, clothes
             final_mask_np = np.isin(parsing_map_np, parts_to_remove, invert=True).astype(np.uint8)
         
+        # --- Create the primary output (masked face on white background) ---
         white_background = np.ones_like(image_resized, dtype=np.uint8) * 255
         mask_3channel = cv2.cvtColor(final_mask_np * 255, cv2.COLOR_GRAY2BGR)
-        
         result_img_bgr = np.where(mask_3channel != 0, image_resized, white_background)
-
         result_tensor = cv2_img_to_tensor(result_img_bgr)
 
-        return (result_tensor,)
+        # --- Create the secondary RGBA face output ---
+        # 1. Get the RGB channels from the resized BGR image
+        image_resized_rgb = cv2.cvtColor(image_resized, cv2.COLOR_BGR2RGB)
+        # 2. Create the alpha channel from the final mask
+        alpha_channel = final_mask_np * 255
+        # 3. Stack RGB and Alpha channels to create a 4-channel RGBA image
+        face_rgba_np = np.dstack((image_resized_rgb, alpha_channel))
+        # 4. Convert the RGBA numpy array to a tensor
+        face_rgba_tensor = torch.from_numpy(face_rgba_np.astype(np.float32) / 255.0).unsqueeze(0)
+
+        return (result_tensor, face_rgba_tensor,)
 
 
+# --- MAPPINGS ---
 NODE_CLASS_MAPPINGS = {
     "FaceProcessorLoader": FaceProcessorLoader,
     "ApplyFaceProcessor": ApplyFaceProcessor
@@ -246,3 +259,5 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "FaceProcessorLoader": "Stand-In Processor Loader",
     "ApplyFaceProcessor": "Apply Stand-In Processor"
 }
+
+

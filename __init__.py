@@ -16,13 +16,16 @@ NODE_DISPLAY_NAME_MAPPINGS = {}
 
 try:
     from .nodes import FaceProcessorLoader, ApplyFaceProcessor
+    from .videoinput import VideoInputPreprocessor
     
     # Map the class names to the classes themselves
     NODE_CLASS_MAPPINGS["FaceProcessorLoader"] = FaceProcessorLoader
     NODE_CLASS_MAPPINGS["ApplyFaceProcessor"] = ApplyFaceProcessor
+    NODE_CLASS_MAPPINGS["VideoInputPreprocessor"] = VideoInputPreprocessor
 
     NODE_DISPLAY_NAME_MAPPINGS["FaceProcessorLoader"] = "Stand-In Processor Loader"
     NODE_DISPLAY_NAME_MAPPINGS["ApplyFaceProcessor"] = "Apply Stand-In Processor"
+    NODE_DISPLAY_NAME_MAPPINGS["VideoInputPreprocessor"] = "Stand-In VideoInputPreprocessor"
 
     logger.info("Successfully loaded all Stand-In nodes.")
 

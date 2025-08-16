@@ -1,4 +1,4 @@
 ultralytics
-huggingface_hub==0.31.1
-facexlib==0.3.0
-onnxruntime-gpu==1.22.0
+huggingface_hub>=0.31.1
+facexlib>=0.3.0
+onnxruntime-gpu>=1.22.0
