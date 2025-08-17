@@ -4,6 +4,7 @@ import numpy as np
 from torchvision.transforms.functional import normalize
 from tqdm import tqdm
 from PIL import Image
+import random
 
 # Helper function to convert a ComfyUI IMAGE tensor to an OpenCV BGR image.
 def tensor_to_cv2_img(tensor_frame: torch.Tensor) -> np.ndarray:
@@ -18,8 +19,10 @@ def tensor_to_pil(tensor_frame: torch.Tensor, mode='RGB') -> Image.Image:
 
 class VideoInputPreprocessor:
     """
-    Processes a batch of image frames to generate a face mask, then uses that mask's
-    bounding box to paste a provided RGBA image onto each frame.
+    Processes a batch of image frames to generate a face mask. It can either paste a
+    provided RGBA image into the face's bounding box (default) or use a generated,
+    feathered mask for a precise, non-rectangular composite ("face only" mode).
+    It also supports random horizontal flipping of the input face on a per-frame basis.
     """
     @classmethod
     def INPUT_TYPES(cls):
@@ -33,6 +36,9 @@ class VideoInputPreprocessor:
                 "face_crop_scale": ("FLOAT", {"default": 1.5, "min": 1.0, "max": 3.0, "step": 0.1}),
                 "dilation_kernel_size": ("INT", {"default": 10, "min": 0, "max": 50, "step": 1}),
                 "with_neck": ("BOOLEAN", {"default": True, "label_on": "enabled", "label_off": "disabled"}),
+                "face_only_mode": ("BOOLEAN", {"default": True, "label_on": "enabled", "label_off": "disabled"}),
+                "feather_amount": ("INT", {"default": 21, "min": 0, "max": 151, "step": 2, "display": "slider"}),
+                "random_horizontal_flip_chance": ("FLOAT", {"default": 0.15, "min": 0.0, "max": 1.0, "step": 0.05}),
             }
         }
     
@@ -41,17 +47,14 @@ class VideoInputPreprocessor:
     FUNCTION = "generate_mask_and_paste"
     CATEGORY = "Stand-In"
 
-    def generate_mask_and_paste(self, face_processor, images: torch.Tensor, face_rgba: torch.Tensor, denoise_strength: float, confidence_threshold: float, face_crop_scale: float, dilation_kernel_size: int, with_neck: bool):
+    def generate_mask_and_paste(self, face_processor, images: torch.Tensor, face_rgba: torch.Tensor, denoise_strength: float, confidence_threshold: float, face_crop_scale: float, dilation_kernel_size: int, with_neck: bool, face_only_mode: bool, feather_amount: int, random_horizontal_flip_chance: float):
         detection_model, parsing_model, device = face_processor
         total_frames, h, w = images.shape[0], images.shape[1], images.shape[2]
         
         print(f"Processing {total_frames} frames ({w}x{h}) to paste new face.")
 
-        # --- Prepare the face_to_paste image ---
-        # Ensure it is RGBA and convert to PIL for easy pasting with transparency
         if face_rgba.shape[3] != 4:
             raise ValueError("The 'face_to_paste' image must be an RGBA image.")
-        # We only need the first image from the batch
         face_to_paste_pil = tensor_to_pil(face_rgba[0], mode='RGBA')
 
         processed_frames_tensors = []
@@ -63,7 +66,7 @@ class VideoInputPreprocessor:
             results = detection_model(frame_bgr, verbose=False)
             confident_boxes = results[0].boxes.xyxy[results[0].boxes.conf > confidence_threshold]
 
-            full_mask_np = np.zeros((h, w), dtype=np.uint8)
+            target_frame_pil = tensor_to_pil(frame_tensor).copy()
 
             if confident_boxes.shape[0] > 0:
                 areas = (confident_boxes[:, 2] - confident_boxes[:, 0]) * (confident_boxes[:, 3] - confident_boxes[:, 1])
@@ -76,44 +79,50 @@ class VideoInputPreprocessor:
                 crop_y1, crop_x1 = max(center_y - half_side, 0), max(center_x - half_side, 0)
                 crop_y2, crop_x2 = min(center_y + half_side, h), min(center_x + half_side, w)
                 
-                face_crop_bgr = frame_bgr[crop_y1:crop_y2, crop_x1:crop_x2]
-
-                if face_crop_bgr.size > 0:
-                    face_resized = cv2.resize(face_crop_bgr, (512, 512), interpolation=cv2.INTER_AREA)
-                    face_rgb = cv2.cvtColor(face_resized, cv2.COLOR_BGR2RGB)
-                    face_tensor_in = torch.from_numpy(face_rgb.astype(np.float32) / 255.0).permute(2, 0, 1).unsqueeze(0).to(device)
-
-                    with torch.no_grad():
-                        normalized_face = normalize(face_tensor_in, [0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
-                        parsing_map = parsing_model(normalized_face)[0].argmax(dim=1, keepdim=True)
-                    
-                    parsing_map_np = parsing_map.squeeze().cpu().numpy().astype(np.uint8)
-                    if with_neck:
-                        final_mask_512 = (parsing_map_np != 0).astype(np.uint8) * 255
-                    else:
-                        parts_to_exclude = [0, 14, 15, 16, 18] 
-                        final_mask_512 = np.isin(parsing_map_np, parts_to_exclude, invert=True).astype(np.uint8) * 255
-
-                    if dilation_kernel_size > 0:
-                        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (dilation_kernel_size, dilation_kernel_size))
-                        final_mask_512 = cv2.dilate(final_mask_512, kernel, iterations=1)
-                    
-                    mask_resized_to_crop = cv2.resize(final_mask_512, (face_crop_bgr.shape[1], face_crop_bgr.shape[0]), interpolation=cv2.INTER_NEAREST)
-                    full_mask_np[crop_y1:crop_y2, crop_x1:crop_x2] = mask_resized_to_crop
-            
-            target_frame_pil = tensor_to_pil(frame_tensor).copy()
-
-            if confident_boxes.shape[0] > 0 and 'face_crop_bgr' in locals() and face_crop_bgr.size > 0:
-                
-                x = crop_x1
-                y = crop_y1
-                box_w = crop_x2 - crop_x1
-                box_h = crop_y2 - crop_y1
+                x, y = crop_x1, crop_y1
+                box_w, box_h = crop_x2 - crop_x1, crop_y2 - crop_y1
 
                 if box_w > 0 and box_h > 0:
+                    # Resize the source face image first
                     face_to_paste_resized = face_to_paste_pil.resize((box_w, box_h), Image.Resampling.LANCZOS)
-                    
-                    target_frame_pil.paste(face_to_paste_resized, (x, y), face_to_paste_resized)
+
+                    # --- MODIFIED: Per-frame random flip logic is now INSIDE the loop ---
+                    if random.random() < random_horizontal_flip_chance:
+                        face_to_paste_resized = face_to_paste_resized.transpose(Image.FLIP_LEFT_RIGHT)
+                    # --- END OF MODIFICATION ---
+
+                    if not face_only_mode:
+                        target_frame_pil.paste(face_to_paste_resized, (x, y), face_to_paste_resized)
+                    else:
+                        face_crop_bgr = frame_bgr[crop_y1:crop_y2, crop_x1:crop_x2]
+                        
+                        if face_crop_bgr.size > 0:
+                            face_resized = cv2.resize(face_crop_bgr, (512, 512), interpolation=cv2.INTER_AREA)
+                            face_rgb = cv2.cvtColor(face_resized, cv2.COLOR_BGR2RGB)
+                            face_tensor_in = torch.from_numpy(face_rgb.astype(np.float32) / 255.0).permute(2, 0, 1).unsqueeze(0).to(device)
+
+                            with torch.no_grad():
+                                normalized_face = normalize(face_tensor_in, [0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+                                parsing_map = parsing_model(normalized_face)[0].argmax(dim=1, keepdim=True)
+                            
+                            parsing_map_np = parsing_map.squeeze().cpu().numpy().astype(np.uint8)
+                            
+                            parts_to_exclude = [0, 14, 15, 16, 17, 18]
+                            final_mask_512 = np.isin(parsing_map_np, parts_to_exclude, invert=True).astype(np.uint8) * 255
+
+                            if dilation_kernel_size > 0:
+                                kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (dilation_kernel_size, dilation_kernel_size))
+                                final_mask_512 = cv2.dilate(final_mask_512, kernel, iterations=1)
+                            
+                            if feather_amount > 0:
+                                if feather_amount % 2 == 0:
+                                    feather_amount += 1
+                                final_mask_512 = cv2.GaussianBlur(final_mask_512, (feather_amount, feather_amount), 0)
+                            
+                            mask_resized_to_crop = cv2.resize(final_mask_512, (box_w, box_h), interpolation=cv2.INTER_LINEAR)
+                            generated_mask_pil = Image.fromarray(mask_resized_to_crop, mode='L')
+                            
+                            target_frame_pil.paste(face_to_paste_resized, (x, y), mask=generated_mask_pil)
 
             processed_np = np.array(target_frame_pil.convert("RGB")).astype(np.float32) / 255.0
             processed_tensor = torch.from_numpy(processed_np)
@@ -121,12 +130,4 @@ class VideoInputPreprocessor:
         
         output_image_batch = torch.stack(processed_frames_tensors)
         
-
-        return (output_image_batch,denoise_strength)
-
-NODE_CLASS_MAPPINGS = {
-    "VideoInputPreprocessor": VideoInputPreprocessor,
-}
-NODE_DISPLAY_NAME_MAPPINGS = {
-   "VideoInputPreprocessor": "Stand-In VideoInputPreprocessor",
-}
+        return (output_image_batch, denoise_strength)

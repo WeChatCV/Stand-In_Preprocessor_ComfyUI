@@ -22,7 +22,7 @@ class VideoBackgroundRestorer:
     """
     Analyzes a synthesized video to create a face mask and then uses this mask
     to composite the synthesized face onto the background of an original video.
-    Includes edge dilation and feathering for seamless blending.
+    Includes edge dilation, feathering, color matching, and a face-only mode.
     """
     @classmethod
     def INPUT_TYPES(cls):
@@ -32,10 +32,14 @@ class VideoBackgroundRestorer:
                 "synth_images": ("IMAGE",),
                 "orig_images": ("IMAGE",),
                 "confidence_threshold": ("FLOAT", {"default": 0.5, "min": 0.1, "max": 1.0, "step": 0.05}),
-                "face_crop_scale": ("FLOAT", {"default": 1.8, "min": 1.0, "max": 3.0, "step": 0.1}),
-                "dilation_kernel_size": ("INT", {"default": 10, "min": 0, "max": 50, "step": 1}),
+                "face_crop_scale": ("FLOAT", {"default": 3.0, "min": 1.0, "max": 10.0, "step": 0.1}),
+                "dilation_kernel_size": ("INT", {"default": 25, "min": 0, "max": 50, "step": 1}),
                 "feather_amount": ("INT", {"default": 50, "min": 0, "max": 151, "step": 2, "display": "slider"}),
-                "with_neck": ("BOOLEAN", {"default": False, "label_on": "enabled", "label_off": "disabled"}),
+                "with_neck": ("BOOLEAN", {"default": True, "label_on": "enabled", "label_off": "disabled"}),
+                "color_match_enabled": ("BOOLEAN", {"default": True, "label_on": "enabled", "label_off": "disabled"}),
+                "color_match_strength": ("FLOAT", {"default": 0.75, "min": 0.0, "max": 1.0, "step": 0.05}),
+                # NEW: Face Only Pasting Mode
+                "face_only_mode": ("BOOLEAN", {"default": True, "label_on": "enabled", "label_off": "disabled"}),
             }
         }
     
@@ -44,7 +48,7 @@ class VideoBackgroundRestorer:
     FUNCTION = "restore_background"
     CATEGORY = "Stand-In"
 
-    def restore_background(self, face_processor, synth_images: torch.Tensor, orig_images: torch.Tensor, confidence_threshold: float, face_crop_scale: float, dilation_kernel_size: int, feather_amount: int, with_neck: bool):
+    def restore_background(self, face_processor, synth_images: torch.Tensor, orig_images: torch.Tensor, confidence_threshold: float, face_crop_scale: float, dilation_kernel_size: int, feather_amount: int, with_neck: bool, color_match_enabled: bool, color_match_strength: float, face_only_mode: bool):
         detection_model, parsing_model, device = face_processor
         
         if synth_images.shape != orig_images.shape:
@@ -52,15 +56,19 @@ class VideoBackgroundRestorer:
 
         total_frames, h, w = synth_images.shape[0], synth_images.shape[1], synth_images.shape[2]
         
-        print(f"Processing {total_frames} frames ({w}x{h}) to restore background with edge feathering.")
+        print(f"Processing {total_frames} frames ({w}x{h}) to restore background.")
 
         processed_frames_tensors = []
+
+        # Define parts to exclude for face-only skin analysis and pasting
+        parts_to_exclude_for_face_only = [0, 14, 15, 16, 17, 18] # bg, neck, cloth, hair etc.
 
         for i in tqdm(range(total_frames), desc="Restoring video background"):
             synth_frame_tensor = synth_images[i]
             orig_frame_tensor = orig_images[i]
             
             synth_frame_bgr = tensor_to_cv2_img(synth_frame_tensor)
+            orig_frame_bgr = tensor_to_cv2_img(orig_frame_tensor)
             
             results = detection_model(synth_frame_bgr, verbose=False)
             confident_boxes = results[0].boxes.xyxy[results[0].boxes.conf > confidence_threshold]
@@ -90,24 +98,59 @@ class VideoBackgroundRestorer:
                         parsing_map = parsing_model(normalized_face)[0].argmax(dim=1, keepdim=True)
                     
                     parsing_map_np = parsing_map.squeeze().cpu().numpy().astype(np.uint8)
-                    if with_neck:
+                    
+                    if color_match_enabled and color_match_strength > 0:
+                        face_skin_mask_512 = np.isin(parsing_map_np, parts_to_exclude_for_face_only, invert=True).astype(np.uint8)
+                        
+                        if np.sum(face_skin_mask_512) > 0:
+                            face_skin_mask_crop = cv2.resize(face_skin_mask_512, (face_crop_bgr.shape[1], face_crop_bgr.shape[0]), interpolation=cv2.INTER_NEAREST)
+
+                            orig_face_crop_bgr = orig_frame_bgr[crop_y1:crop_y2, crop_x1:crop_x2]
+                            source_lab = cv2.cvtColor(orig_face_crop_bgr, cv2.COLOR_BGR2LAB)
+                            target_lab = cv2.cvtColor(face_crop_bgr, cv2.COLOR_BGR2LAB)
+                            
+                            source_mean, source_std = cv2.meanStdDev(source_lab, mask=face_skin_mask_crop)
+                            target_mean, target_std = cv2.meanStdDev(target_lab, mask=face_skin_mask_crop)
+
+                            l, a, b = cv2.split(target_lab)
+                            
+                            eps = 1e-6
+                            l = (l - target_mean[0][0]) * (source_std[0][0] / (target_std[0][0] + eps)) + source_mean[0][0]
+                            a = (a - target_mean[1][0]) * (source_std[1][0] / (target_std[1][0] + eps)) + source_mean[1][0]
+                            b = (b - target_mean[2][0]) * (source_std[2][0] / (target_std[2][0] + eps)) + source_mean[2][0]
+
+                            corrected_lab = cv2.merge([l, a, b])
+                            corrected_lab = np.clip(corrected_lab, 0, 255).astype(np.uint8)
+                            
+                            corrected_face_crop_bgr = cv2.cvtColor(corrected_lab, cv2.COLOR_LAB2BGR)
+                            
+                            face_crop_bgr = cv2.addWeighted(corrected_face_crop_bgr, color_match_strength, face_crop_bgr, 1 - color_match_strength, 0)
+
+                            synth_frame_bgr[crop_y1:crop_y2, crop_x1:crop_x2] = face_crop_bgr
+                            
+                            corrected_synth_rgb = cv2.cvtColor(synth_frame_bgr, cv2.COLOR_BGR2RGB)
+                            synth_frame_tensor = torch.from_numpy(corrected_synth_rgb.astype(np.float32) / 255.0)
+
+                    # --- NEW: MASK SELECTION LOGIC ---
+                    if face_only_mode:
+                        # If face_only_mode is ON, use the precise skin mask and ignore with_neck setting
+                        final_mask_512 = np.isin(parsing_map_np, parts_to_exclude_for_face_only, invert=True).astype(np.uint8) * 255
+                    elif with_neck:
+                        # Standard mode: include neck and hair
                         final_mask_512 = (parsing_map_np != 0).astype(np.uint8) * 255
                     else:
-                        parts_to_exclude = [0, 14, 15, 16, 18] 
-                        final_mask_512 = np.isin(parsing_map_np, parts_to_exclude, invert=True).astype(np.uint8) * 255
+                        # Standard mode: exclude neck
+                        parts_to_exclude_neck = [0, 14, 15, 16, 18]
+                        final_mask_512 = np.isin(parsing_map_np, parts_to_exclude_neck, invert=True).astype(np.uint8) * 255
+                    # --- END OF MASK SELECTION ---
 
-                    # --- EDGE PROCESSING LOGIC ---
-                    # 1. DILATION (Expansion)
                     if dilation_kernel_size > 0:
                         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (dilation_kernel_size, dilation_kernel_size))
                         final_mask_512 = cv2.dilate(final_mask_512, kernel, iterations=1)
                     
-                    # 2. FEATHERING (Softening)
                     if feather_amount > 0:
-                        # Ensure the kernel size is odd
                         if feather_amount % 2 == 0:
                             feather_amount += 1
-                        # Apply Gaussian Blur to soften the edges of the mask
                         final_mask_512 = cv2.GaussianBlur(final_mask_512, (feather_amount, feather_amount), 0)
 
                     mask_resized_to_crop = cv2.resize(final_mask_512, (face_crop_bgr.shape[1], face_crop_bgr.shape[0]), interpolation=cv2.INTER_LINEAR)
@@ -122,11 +165,3 @@ class VideoBackgroundRestorer:
         output_image_batch = torch.stack(processed_frames_tensors).cpu()
         
         return (output_image_batch,)
-
-NODE_CLASS_MAPPINGS = {
-    "VideoBackgroundRestorer": VideoBackgroundRestorer,
-}
-
-NODE_DISPLAY_NAME_MAPPINGS = {
-   "VideoBackgroundRestorer": "Stand-In Background Restorer",
-}

@@ -167,6 +167,8 @@ class ApplyFaceProcessor:
                 "face_crop_scale": ("FLOAT", {"default": 1.5, "min": 1.0, "max": 3.0, "step": 0.1}),
                 "confidence_threshold": ("FLOAT", {"default": 0.5, "min": 0.1, "max": 1.0, "step": 0.05}),
                 "with_neck": ("BOOLEAN", {"default": False, "label_on": "enabled", "label_off": "disabled"}),
+                # NEW: Face Only Mode
+                "face_only_mode": ("BOOLEAN", {"default": False, "label_on": "enabled", "label_off": "disabled"}),
             }
         }
 
@@ -175,7 +177,7 @@ class ApplyFaceProcessor:
     FUNCTION = "apply_processing"
     CATEGORY = "Stand-In"
 
-    def apply_processing(self, face_processor, image, resize_to, border_thresh, face_crop_scale, confidence_threshold, with_neck):
+    def apply_processing(self, face_processor, image, resize_to, border_thresh, face_crop_scale, confidence_threshold, with_neck, face_only_mode):
         detection_model, parsing_model, device = face_processor
         
         frame = tensor_to_cv2_img(image)
@@ -218,17 +220,27 @@ class ApplyFaceProcessor:
         face_tensor = _img2tensor(image_resized, bgr2rgb=True).unsqueeze(0).to(device)
         
         with torch.no_grad():
-            normalized_face = normalize(face_tensor, [0.5, 0.5, 0.5], [0.5, 0.5, 0.5])
+            # The BiSeNet model in facexlib was trained on a different normalization
+            normalized_face = normalize(face_tensor, [0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
             parsing_out = parsing_model(normalized_face)[0]
             parsing_map_tensor = parsing_out.argmax(dim=1, keepdim=True)
 
         parsing_map_np = parsing_map_tensor.squeeze().cpu().numpy().astype(np.uint8)
         
-        if with_neck:
+        # --- UPDATED: MASK SELECTION LOGIC ---
+        if face_only_mode:
+            # If face_only_mode is ON, create a precise mask for core facial features
+            # This will ignore the with_neck setting
+            parts_to_exclude = [0, 14, 15, 16, 17, 18] # bg, neck, cloth, hair etc.
+            final_mask_np = np.isin(parsing_map_np, parts_to_exclude, invert=True).astype(np.uint8)
+        elif with_neck:
+            # Standard mode: include neck and hair
             final_mask_np = (parsing_map_np != 0).astype(np.uint8)
         else:
-            parts_to_remove = [0, 14, 16] # Typically background, neck, clothes
-            final_mask_np = np.isin(parsing_map_np, parts_to_remove, invert=True).astype(np.uint8)
+            # Standard mode: exclude neck (original behavior)
+            parts_to_exclude = [0, 14, 15, 16, 18]
+            final_mask_np = np.isin(parsing_map_np, parts_to_exclude, invert=True).astype(np.uint8)
+        # --- END OF MASK SELECTION ---
         
         # --- Create the primary output (masked face on white background) ---
         white_background = np.ones_like(image_resized, dtype=np.uint8) * 255
@@ -237,17 +249,12 @@ class ApplyFaceProcessor:
         result_tensor = cv2_img_to_tensor(result_img_bgr)
 
         # --- Create the secondary RGBA face output ---
-        # 1. Get the RGB channels from the resized BGR image
         image_resized_rgb = cv2.cvtColor(image_resized, cv2.COLOR_BGR2RGB)
-        # 2. Create the alpha channel from the final mask
         alpha_channel = final_mask_np * 255
-        # 3. Stack RGB and Alpha channels to create a 4-channel RGBA image
         face_rgba_np = np.dstack((image_resized_rgb, alpha_channel))
-        # 4. Convert the RGBA numpy array to a tensor
         face_rgba_tensor = torch.from_numpy(face_rgba_np.astype(np.float32) / 255.0).unsqueeze(0)
 
         return (result_tensor, face_rgba_tensor,)
-
 
 # --- MAPPINGS ---
 NODE_CLASS_MAPPINGS = {
