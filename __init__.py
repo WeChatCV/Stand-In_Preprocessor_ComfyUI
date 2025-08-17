@@ -19,6 +19,7 @@ try:
     from .videoinput import VideoInputPreprocessor
     from .videocombine import VideoBackgroundRestorer
     from .choose_face_only_mode import FaceOnlyModeSwitch
+    from .cropper import VideoFramePreprocessor
     
     # Map the class names to the classes themselves
     NODE_CLASS_MAPPINGS["FaceProcessorLoader"] = FaceProcessorLoader
@@ -26,6 +27,7 @@ try:
     NODE_CLASS_MAPPINGS["VideoInputPreprocessor"] = VideoInputPreprocessor
     NODE_CLASS_MAPPINGS["VideoBackgroundRestorer"] = VideoBackgroundRestorer
     NODE_CLASS_MAPPINGS["FaceOnlyModeSwitch"] = FaceOnlyModeSwitch
+    NODE_CLASS_MAPPINGS["VideoFramePreprocessor"] = VideoFramePreprocessor
 
 
     NODE_DISPLAY_NAME_MAPPINGS["FaceProcessorLoader"] = "Stand-In Processor Loader"
@@ -33,6 +35,7 @@ try:
     NODE_DISPLAY_NAME_MAPPINGS["VideoInputPreprocessor"] = "Stand-In VideoInputPreprocessor"
     NODE_DISPLAY_NAME_MAPPINGS["VideoBackgroundRestorer"] = "Stand-In Background Restorer"
     NODE_DISPLAY_NAME_MAPPINGS["FaceOnlyModeSwitch"] = "Face Only Mode Switch (Stand-In)"
+    NODE_DISPLAY_NAME_MAPPINGS["VideoFramePreprocessor"] = "Stand-In Trimmer & Cropper"
 
     logger.info("Successfully loaded all Stand-In nodes.")
 

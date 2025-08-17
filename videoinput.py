@@ -38,7 +38,7 @@ class VideoInputPreprocessor:
                 "with_neck": ("BOOLEAN", {"default": True, "label_on": "enabled", "label_off": "disabled"}),
                 "face_only_mode": ("BOOLEAN", {"default": True, "label_on": "enabled", "label_off": "disabled"}),
                 "feather_amount": ("INT", {"default": 21, "min": 0, "max": 151, "step": 2, "display": "slider"}),
-                "random_horizontal_flip_chance": ("FLOAT", {"default": 0.15, "min": 0.0, "max": 1.0, "step": 0.05}),
+                "random_horizontal_flip_chance": ("FLOAT", {"default": 0.05, "min": 0.0, "max": 1.0, "step": 0.05}),
             }
         }
     
