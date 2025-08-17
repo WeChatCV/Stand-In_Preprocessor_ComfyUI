@@ -32,8 +32,8 @@ class VideoBackgroundRestorer:
                 "synth_images": ("IMAGE",),
                 "orig_images": ("IMAGE",),
                 "confidence_threshold": ("FLOAT", {"default": 0.5, "min": 0.1, "max": 1.0, "step": 0.05}),
-                "face_crop_scale": ("FLOAT", {"default": 2.0, "min": 1.0, "max": 3.0, "step": 0.1}),
-                "dilation_kernel_size": ("INT", {"default": 50, "min": 0, "max": 50, "step": 1}),
+                "face_crop_scale": ("FLOAT", {"default": 1.8, "min": 1.0, "max": 3.0, "step": 0.1}),
+                "dilation_kernel_size": ("INT", {"default": 10, "min": 0, "max": 50, "step": 1}),
                 "feather_amount": ("INT", {"default": 50, "min": 0, "max": 151, "step": 2, "display": "slider"}),
                 "with_neck": ("BOOLEAN", {"default": False, "label_on": "enabled", "label_off": "disabled"}),
             }
