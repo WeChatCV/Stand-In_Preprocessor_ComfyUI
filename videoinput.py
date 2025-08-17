@@ -83,13 +83,41 @@ class VideoInputPreprocessor:
                 box_w, box_h = crop_x2 - crop_x1, crop_y2 - crop_y1
 
                 if box_w > 0 and box_h > 0:
-                    # Resize the source face image first
-                    face_to_paste_resized = face_to_paste_pil.resize((box_w, box_h), Image.Resampling.LANCZOS)
+                    
+                    # --- NEW: ASPECT-RATIO PRESERVING RESIZE LOGIC ---
+                    source_img = face_to_paste_pil.copy()
 
-                    # --- MODIFIED: Per-frame random flip logic is now INSIDE the loop ---
+                    # Apply per-frame random flip
                     if random.random() < random_horizontal_flip_chance:
-                        face_to_paste_resized = face_to_paste_resized.transpose(Image.FLIP_LEFT_RIGHT)
-                    # --- END OF MODIFICATION ---
+                        source_img = source_img.transpose(Image.FLIP_LEFT_RIGHT)
+
+                    # Calculate new size to fit within the box_w, box_h while maintaining aspect ratio
+                    source_w, source_h = source_img.size
+                    dest_aspect = box_w / box_h
+                    source_aspect = source_w / source_h
+
+                    if source_aspect > dest_aspect:
+                        # Source is wider than destination, scale by width
+                        new_w = box_w
+                        new_h = int(new_w / source_aspect)
+                    else:
+                        # Source is taller or same aspect, scale by height
+                        new_h = box_h
+                        new_w = int(new_h * source_aspect)
+
+                    # Resize with correct aspect ratio
+                    face_resized_correct_aspect = source_img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+                    
+                    # Create a transparent canvas of the destination box size
+                    canvas = Image.new('RGBA', (box_w, box_h), (0, 0, 0, 0))
+                    # Calculate position to paste the resized image in the center of the canvas
+                    paste_x = (box_w - new_w) // 2
+                    paste_y = (box_h - new_h) // 2
+                    # Paste the aspect-correct image onto the canvas
+                    canvas.paste(face_resized_correct_aspect, (paste_x, paste_y))
+                    
+                    face_to_paste_resized = canvas
+                    # --- END OF NEW LOGIC ---
 
                     if not face_only_mode:
                         target_frame_pil.paste(face_to_paste_resized, (x, y), face_to_paste_resized)
