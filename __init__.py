@@ -18,17 +18,21 @@ try:
     from .nodes import FaceProcessorLoader, ApplyFaceProcessor
     from .videoinput import VideoInputPreprocessor
     from .videocombine import VideoBackgroundRestorer
+    from .choose_face_only_mode import FaceOnlyModeSwitch
     
     # Map the class names to the classes themselves
     NODE_CLASS_MAPPINGS["FaceProcessorLoader"] = FaceProcessorLoader
     NODE_CLASS_MAPPINGS["ApplyFaceProcessor"] = ApplyFaceProcessor
     NODE_CLASS_MAPPINGS["VideoInputPreprocessor"] = VideoInputPreprocessor
     NODE_CLASS_MAPPINGS["VideoBackgroundRestorer"] = VideoBackgroundRestorer
+    NODE_CLASS_MAPPINGS["FaceOnlyModeSwitch"] = FaceOnlyModeSwitch
+
 
     NODE_DISPLAY_NAME_MAPPINGS["FaceProcessorLoader"] = "Stand-In Processor Loader"
     NODE_DISPLAY_NAME_MAPPINGS["ApplyFaceProcessor"] = "Apply Stand-In Processor"
     NODE_DISPLAY_NAME_MAPPINGS["VideoInputPreprocessor"] = "Stand-In VideoInputPreprocessor"
     NODE_DISPLAY_NAME_MAPPINGS["VideoBackgroundRestorer"] = "Stand-In Background Restorer"
+    NODE_DISPLAY_NAME_MAPPINGS["FaceOnlyModeSwitch"] = "Face Only Mode Switch (Stand-In)"
 
     logger.info("Successfully loaded all Stand-In nodes.")
 
