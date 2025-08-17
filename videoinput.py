@@ -28,6 +28,7 @@ class VideoInputPreprocessor:
                 "face_processor": ("FACE_PROCESSOR",),
                 "images": ("IMAGE",),
                 "face_rgba": ("IMAGE",), 
+                "denoise_strength": ("FLOAT", {"default": 0.5, "min": 0.1, "max": 1.0, "step": 0.01}),
                 "confidence_threshold": ("FLOAT", {"default": 0.5, "min": 0.1, "max": 1.0, "step": 0.05}),
                 "face_crop_scale": ("FLOAT", {"default": 1.5, "min": 1.0, "max": 3.0, "step": 0.1}),
                 "dilation_kernel_size": ("INT", {"default": 10, "min": 0, "max": 50, "step": 1}),
@@ -35,12 +36,12 @@ class VideoInputPreprocessor:
             }
         }
     
-    RETURN_TYPES = ("IMAGE",)
-    RETURN_NAMES = ("processed_images",)
+    RETURN_TYPES = ("IMAGE", "FLOAT")
+    RETURN_NAMES = ("processed_images", "denoise_strength")
     FUNCTION = "generate_mask_and_paste"
     CATEGORY = "Stand-In"
 
-    def generate_mask_and_paste(self, face_processor, images: torch.Tensor, face_rgba: torch.Tensor, confidence_threshold: float, face_crop_scale: float, dilation_kernel_size: int, with_neck: bool):
+    def generate_mask_and_paste(self, face_processor, images: torch.Tensor, face_rgba: torch.Tensor, denoise_strength: float, confidence_threshold: float, face_crop_scale: float, dilation_kernel_size: int, with_neck: bool):
         detection_model, parsing_model, device = face_processor
         total_frames, h, w = images.shape[0], images.shape[1], images.shape[2]
         
@@ -59,7 +60,6 @@ class VideoInputPreprocessor:
             frame_tensor = images[i]
             frame_bgr = tensor_to_cv2_img(frame_tensor)
             
-            # --- 1. Generate Face Mask (same logic as before) ---
             results = detection_model(frame_bgr, verbose=False)
             confident_boxes = results[0].boxes.xyxy[results[0].boxes.conf > confidence_threshold]
 
@@ -101,11 +101,8 @@ class VideoInputPreprocessor:
                     mask_resized_to_crop = cv2.resize(final_mask_512, (face_crop_bgr.shape[1], face_crop_bgr.shape[0]), interpolation=cv2.INTER_NEAREST)
                     full_mask_np[crop_y1:crop_y2, crop_x1:crop_x2] = mask_resized_to_crop
             
-            # --- 2. Paste Image onto Frame ---
-            # Use a copy to avoid modifying the original data
             target_frame_pil = tensor_to_pil(frame_tensor).copy()
 
-            # Find the bounding box of the largest contour in the mask
             if confident_boxes.shape[0] > 0 and 'face_crop_bgr' in locals() and face_crop_bgr.size > 0:
                 
                 x = crop_x1
@@ -125,7 +122,7 @@ class VideoInputPreprocessor:
         output_image_batch = torch.stack(processed_frames_tensors)
         
 
-        return (output_image_batch,)
+        return (output_image_batch,denoise_strength)
 
 NODE_CLASS_MAPPINGS = {
     "VideoInputPreprocessor": VideoInputPreprocessor,
