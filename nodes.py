@@ -10,7 +10,7 @@ from facexlib.parsing import init_parsing_model
 from torchvision.transforms.functional import normalize
 from typing import Union, Optional
 import folder_paths
-
+from packaging.version import parse as parse_version
 # --- GLOBALS ---
 LOADED_PROCESSORS = {}
 
@@ -135,9 +135,29 @@ class FaceProcessorLoader:
             model_path = download_yolo_model(yolo_model_name)
             
             print(f"Loading YOLO model from local path: {model_path}")
-            detection_model = YOLO(model_path)
+            detection_model = None
+            TORCH_VERSION = parse_version(torch.__version__)
+            original_torch_load = torch.load
+            if TORCH_VERSION >= parse_version("2.6.0"):
+                print(f"PyTorch version {TORCH_VERSION} >= 2.6.0 detected. Applying compatibility patch for model loading.")
+                def patched_load(*args, **kwargs):
+                    kwargs['weights_only'] = False
+                    return original_torch_load(*args, **kwargs)
+                torch.load = patched_load
+            
+            try:
+                detection_model = YOLO(model_path)
+            finally:
+                torch.load = original_torch_load
+                if TORCH_VERSION >= parse_version("2.6.0"):
+                    print("Restored original torch.load.")
+            
+            if detection_model is None:
+                raise Exception("YOLO model could not be loaded.")
+
             detection_model.to(device)
             print("YOLO model loaded successfully.")
+
         except Exception as e:
             print(f"Error loading YOLO model: {e}")
             raise e
