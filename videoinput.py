@@ -93,8 +93,7 @@ class VideoInputPreprocessor:
                 print("[Warning] No landmarks found in source 'face_rgba' image. Angle matching disabled.")
                 match_angle_and_size = False
 
-        if not match_angle_and_size:
-            face_to_paste_pil = tensor_to_pil(face_rgba[0], mode='RGBA')
+        face_to_paste_pil = tensor_to_pil(face_rgba[0], mode='RGBA')
 
         processed_frames_tensors = []
 
